@@ -13,12 +13,12 @@
 static const char *s_class_path_name = "com/sky/drovik/player/ffmpeg/JniUtils";
 
 static JNINativeMethod s_methods[] = {
-	{"openVideoFile", "(Ljava/lang/String;)I", (int) openVideoFile}
-	//{"glRender", "()V", (void*) glRender},
+	{"openVideoFile", "(Ljava/lang/String;)I", (void*) openVideoFile},
+	//{"", "()V", (void*) glRender},
 	//{"glDecode", "(Ljava/lang/String;)V", (void*) glDecode},
 	//{"glH264Decoder","([BI)I", (int)glH264Decoder},
 	//{"glTakePicture","(Ljava/lang/String;)V", (void*)glTakePicture},
-	//{"ffmpegMpeg4Decoder","([BILandroid/graphics/Bitmap;)I", (int)ffmpegMpeg4Decoder},
+	{"display","(Landroid/graphics/Bitmap;)I", (void *)display}
 	//{"ffmpegMpeg4DecoderExit","()V", (void*)ffmpegMpeg4DecoderExit}
 	};
 

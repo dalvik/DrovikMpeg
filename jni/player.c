@@ -1,11 +1,41 @@
 #include <player.h>
 #include <android/log.h>
+#include <android/bitmap.h>
 #define LOG_TAG "player"
 #define LOGI(...)  __android_log_print(ANDROID_LOG_INFO,LOG_TAG,__VA_ARGS__)
 #define LOGE(...)  __android_log_print(ANDROID_LOG_ERROR,LOG_TAG,__VA_ARGS__)
 
 JavaVM *g_jvm = NULL;
+jclass mClass = NULL;
+jobject mObject = NULL;
+jmethodID refresh = NULL;
+int registerCallBackRes = -1;
 
+const int MSG_REFRESH = 1;
+const int MSG_EXIT = 2;	
+AVFrame *pFrameRGB;
+uint8_t *buffer;
+
+static void fill_bitmap(AndroidBitmapInfo*  info, void *pixels, AVFrame *pFrame)
+{
+    uint8_t *frameLine;
+
+    int  yy;
+    for (yy = 0; yy < info->height; yy++) {
+        uint8_t*  line = (uint8_t*)pixels;
+        frameLine = (uint8_t *)pFrame->data[0] + (yy * pFrame->linesize[0]);
+        int xx;
+        for (xx = 0; xx < info->width; xx++) {
+            int out_offset = xx * 4;
+            int in_offset = xx * 3;
+            line[out_offset] = frameLine[in_offset];
+            line[out_offset+1] = frameLine[in_offset+1];
+            line[out_offset+2] = frameLine[in_offset+2];
+            line[out_offset+3] = 0;
+        }
+        pixels = (char*)pixels + info->stride;
+    }
+}
 static void set_clock_at(Clock *c, double pts, int serial, double time)
 {
     c->pts = pts;
@@ -360,6 +390,7 @@ static int is_realtime(AVFormatContext *s)
 static int queue_picture(VideoState *is, AVFrame *src_frame, double pts, int64_t pos, int serial)
 {
     VideoPicture *vp;
+	//AVPicture *pict;
     /* wait until we have space to put a new picture */
     //SDL_LockMutex(is->pictq_mutex);
 	pthread_mutex_lock(&is->pictq_mutex);
@@ -372,7 +403,10 @@ static int queue_picture(VideoState *is, AVFrame *src_frame, double pts, int64_t
 	pthread_mutex_unlock(&is->pictq_mutex);
     vp = &is->pictq[is->pictq_windex];
     vp->sar = src_frame->sample_aspect_ratio;
-
+    sws_scale(is->img_convert_ctx, src_frame->data, src_frame->linesize, 0, src_frame->height, pFrameRGB->data, pFrameRGB->linesize);
+	//LOGI("### 222 src_frame->width = %d, pict->data = %p, pict.linesize = %d", src_frame->width, pFrameRGB->width,pFrameRGB->linesize[0]);
+	
+	vp->pict = pFrameRGB;
 	vp->pts = pts;
 	vp->pos = pos;
 	vp->serial = serial;
@@ -380,7 +414,7 @@ static int queue_picture(VideoState *is, AVFrame *src_frame, double pts, int64_t
 		is->pictq_windex = 0;
 	//SDL_LockMutex(is->pictq_mutex);
 	pthread_mutex_lock(&is->pictq_mutex);
-	//is->pictq_size++;
+	is->pictq_size++;
 	//SDL_UnlockMutex(is->pictq_mutex);
 	pthread_mutex_unlock(&is->pictq_mutex);
     return 0;
@@ -421,7 +455,7 @@ static int get_video_frame(VideoState *is, AVFrame *frame, AVPacket *pkt, int *s
 	}
 
     if (got_picture) {
-		LOGI("### got_picture");
+		//LOGI("### got_picture  linesize = %d, width = %d", frame->linesize[0], frame->width);
         int ret = 1;
         double dpts = NAN;
         if (decoder_reorder_pts == -1) {
@@ -567,7 +601,6 @@ static int audio_open(void *opaque, int64_t wanted_channel_layout, int wanted_nb
     return 10;//spec.size;
 }
 
-
 /* open a given stream. Return 0 if OK audio 1  video 0 */ 
 static int stream_component_open(VideoState *is, int stream_index)
 {
@@ -705,7 +738,17 @@ LOGE("### audio info channel_layout = %d, avctx->channel_layout = %d, sameple_ra
     case AVMEDIA_TYPE_VIDEO:
         is->video_stream = stream_index;
         is->video_st = ic->streams[stream_index];
-
+		//LOGI("### 1111 avctx->width = %d, avctx->height = %d", avctx->width, avctx->height);
+		is->img_convert_ctx = sws_getCachedContext(NULL,
+		  avctx->width, avctx->height, avctx->pix_fmt,
+		  avctx->width, avctx->height,
+		  PIX_FMT_RGB24, SWS_BICUBIC,
+		  NULL, NULL, NULL);
+		pFrameRGB=avcodec_alloc_frame();		   
+		int numBytes;
+		numBytes=avpicture_get_size(PIX_FMT_RGB24, avctx->width, avctx->height);
+		buffer=(uint8_t *)av_malloc(numBytes*sizeof(uint8_t));
+		avpicture_fill((AVPicture *)pFrameRGB, buffer, PIX_FMT_RGB24, avctx->width, avctx->height);
         packet_queue_start(&is->videoq);
         //is->video_tid = SDL_CreateThread(video_thread, is);
 		pthread_t videoThread;
@@ -793,7 +836,7 @@ void *read_thread(void *arg) {
         int64_t timestamp;
 
         timestamp = start_time;
-        /* add the stream start time */
+        /// add the stream start time 
         if (ic->start_time != AV_NOPTS_VALUE)
             timestamp += ic->start_time;
         ret = avformat_seek_file(ic, -1, INT64_MIN, timestamp, INT64_MAX, 0);
@@ -828,7 +871,7 @@ void *read_thread(void *arg) {
         av_dump_format(ic, 0, is->filename, 0);
     }
     is->show_mode = show_mode;
-    /* open the streams */
+    // open the streams 
     if (st_index[AVMEDIA_TYPE_AUDIO] >= 0) {
         stream_component_open(is, st_index[AVMEDIA_TYPE_AUDIO]);
     }
@@ -841,7 +884,7 @@ void *read_thread(void *arg) {
     if (st_index[AVMEDIA_TYPE_SUBTITLE] >= 0) {
         stream_component_open(is, st_index[AVMEDIA_TYPE_SUBTITLE]);
     }
-	LOGE("### is->video_stream = 5d, is->audio_stream =%d\n", is->video_stream, is->audio_stream );
+	LOGE("### is->video_stream = %d, is->audio_stream =%d\n", is->video_stream, is->audio_stream );
     if (is->video_stream < 0 && is->audio_stream < 0) {
         av_log(NULL, AV_LOG_FATAL, "%s: could not open codecs\n", is->filename);
 		LOGE("### %s: could not open codecs\n", is->filename);
@@ -1117,4 +1160,116 @@ jint openVideoFile(JNIEnv *env, jclass clazz,jstring name){
 		return -1;
     }
 	return 0;
+}
+
+
+int display(JNIEnv * env, jobject this, jstring bitmap){
+	AndroidBitmapInfo  info;
+	void*              pixels;
+	int ret;
+    if ((ret = AndroidBitmap_getInfo(env, bitmap, &info)) < 0) {
+        LOGE("AndroidBitmap_getInfo() failed ! error=%d", ret);
+        return -1;//bitmap_getinfo_error;
+	}
+	VideoPicture *vp;
+	double actual_delay, delay, sync_threshold, ref_clock, diff;
+	while(!is->abort_request) {// && is->video_st
+		if ((ret = AndroidBitmap_lockPixels(env, bitmap, &pixels)) < 0) {
+				LOGE("AndroidBitmap_lockPixels() failed ! error=%d", ret);
+		}
+		if(is->pictq_size == 0) {
+			usleep(5000);
+			//LOGI("no image, wait.");
+		} else {
+			// È¡³öÍ¼Ïñ
+			vp = &is->pictq[is->pictq_rindex];
+			//LOGI("### 333 vp->pict->width = %d", vp->pict->linesize[0]);
+			/*is->video_current_pts = vp->pts;
+			is->video_current_pts_time = av_gettime();
+			delay = vp->pts - is->frame_last_pts;
+			LOGE(1, "is->video_current_pts = %d, delay = %d",is->video_current_pts,delay);
+			if (delay <= 0 || delay >= 1.0) {
+				delay = is->frame_last_delay;
+			}
+			is->frame_last_delay = delay;
+			is->frame_last_pts = vp->pts;
+			is->frame_timer += delay;
+			actual_delay = is->frame_timer - (av_gettime() / 1000000.0);
+			if(is->av_sync_type != AV_SYNC_VIDEO_MASTER) {
+				ref_clock = get_master_clock(is);
+				diff = vp->pts - ref_clock;
+				sync_threshold = (delay > AV_SYNC_THRESHOLD) ? delay :	AV_SYNC_THRESHOLD;
+				if(fabs(diff) < AV_NOSYNC_THRESHOLD) {
+					if(diff <= -sync_threshold) {
+						delay = 0;
+					} else if(diff >= sync_threshold) {
+						delay = 2 * delay;
+					}
+				}
+			}
+			if (actual_delay < 0.010) {
+			  actual_delay = 0.010;
+			}*/
+			//LOGE(10, "### refresh delay =  %d",(int)(actual_delay * 1000 + 0.5));
+			//usleep(10000*(int)(actual_delay * 1000 + 0.5));
+			fill_bitmap(&info, pixels, vp->pict);
+			AndroidBitmap_unlockPixels(env, bitmap);
+			if(++is->pictq_rindex == VIDEO_PICTURE_QUEUE_SIZE) {
+				is->pictq_rindex = 0;
+			}
+			pthread_mutex_lock(&is->pictq_mutex);
+			is->pictq_size--;
+			pthread_cond_signal(&is->pictq_cond);
+			pthread_mutex_unlock(&is->pictq_mutex);
+			if(mClass == NULL || mObject == NULL || refresh == NULL) {
+				registerCallBackRes = registerCallBack(env);
+				LOGI("registerCallBack == %d", registerCallBackRes);	
+				if(registerCallBackRes != 0) {
+					//is->quit = 0;				
+					continue;
+				}
+			}
+			(*env)->CallVoidMethod(env, mObject, refresh, MSG_REFRESH);
+			
+		}
+	}
+	return 0;
+}
+
+int registerCallBack(JNIEnv *env) {
+	if(mClass == NULL) {
+		mClass = (*env)->FindClass(env, "com/sky/drovik/player/media/MovieView");
+		if(mClass == NULL){
+			return -1;
+		}
+		LOGI("register local class OK.");
+	}
+	if (mObject == NULL) {
+		if (GetProviderInstance(env, mClass) != 1) {
+			//(*env)->DeleteLocalRef(env, mClass);
+			return -1;
+		}
+		LOGI("register local object OK.");
+	}
+	if(refresh == NULL) {
+		refresh = (*env)->GetMethodID(env, mClass, "callBackRefresh","(I)V");
+		if(refresh == NULL) {
+			//(*env)->DeleteLocalRef(env, mClass);
+			//(*env)->DeleteLocalRef(env, mObject);
+			return -3;
+		}
+	}
+	return 0;
+}
+
+int GetProviderInstance(JNIEnv *env,jclass obj_class) {
+	jmethodID construction_id = (*env)->GetMethodID(env, obj_class,	"<init>", "()V");
+	if (construction_id == 0) {
+		return -1;
+	}
+	mObject = (*env)->NewObject(env, obj_class, construction_id);
+	if (mObject == NULL) {
+		return -2;
+	}
+	return 1;
 }

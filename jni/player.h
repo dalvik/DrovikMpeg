@@ -22,7 +22,7 @@
 #define MIN_FRAMES 5
 #define AV_NOSYNC_THRESHOLD 10.0
 static int64_t sws_flags = SWS_BICUBIC;
-	
+
 typedef struct MyAVPacketList {
     AVPacket pkt;
     struct MyAVPacketList *next;
@@ -52,7 +52,7 @@ typedef struct VideoPicture {
     int allocated;
     int reallocate;
     int serial;
-
+	AVPicture *pict;
     AVRational sar;
 } VideoPicture;
 
@@ -176,9 +176,9 @@ typedef struct VideoState {
     int pictq_size, pictq_rindex, pictq_windex;
     pthread_mutex_t pictq_mutex;
     pthread_cond_t pictq_cond;
-#if !CONFIG_AVFILTER
+//#if !CONFIG_AVFILTER
     struct SwsContext *img_convert_ctx;
-#endif
+//#endif
     //SDL_Rect last_display_rect;
 
     char filename[1024];
@@ -261,3 +261,4 @@ static AVPacket flush_pkt;
 static VideoState *is;
 
 jint openVideoFile(JNIEnv *env, jclass clazz,jstring name);
+int display(JNIEnv *env, jclass clazz, jstring bitmap);
