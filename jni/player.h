@@ -21,6 +21,14 @@
 #define MAX_QUEUE_SIZE (15 * 1024 * 1024)
 #define MIN_FRAMES 5
 #define AV_NOSYNC_THRESHOLD 10.0
+#define SAMPLE_CORRECTION_PERCENT_MAX 10
+/* external clock speed adjustment constants for realtime sources based on buffer fullness */
+#define EXTERNAL_CLOCK_SPEED_MIN  0.900
+#define EXTERNAL_CLOCK_SPEED_MAX  1.010
+#define EXTERNAL_CLOCK_SPEED_STEP 0.001
+
+/* we use about AUDIO_DIFF_AVG_NB A-V differences to make the average */
+#define AUDIO_DIFF_AVG_NB   20
 static int64_t sws_flags = SWS_BICUBIC;
 
 typedef struct MyAVPacketList {
@@ -128,9 +136,7 @@ typedef struct VideoState {
     int audio_pkt_temp_serial;
     int audio_last_serial;
     struct AudioParams audio_src;
-#if CONFIG_AVFILTER
-    //struct AudioParams audio_filter_src;
-#endif
+
     struct AudioParams audio_tgt;
     struct SwrContext *swr_ctx;
     int frame_drops_early;
@@ -259,6 +265,5 @@ static AVPacket flush_pkt;
 #define FF_QUIT_EVENT    (SDL_USEREVENT + 2)
 
 static VideoState *is;
-
 jint openVideoFile(JNIEnv *env, jclass clazz,jstring name);
 int display(JNIEnv *env, jclass clazz, jstring bitmap);
